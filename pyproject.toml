@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "pmr171-logo-tool"
+version = "0.1.0"
+description = "Patch custom boot logos into PMR-171 SDR transceiver firmware"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+dependencies = [
+    "Pillow>=9.0",
+]
+
+[project.optional-dependencies]
+fast = ["numpy>=1.22"]
+dev = [
+    "numpy>=1.22",
+    "pytest>=7.0",
+]
+
+[project.scripts]
+pmr171-logo = "cli:main"
+
+[tool.setuptools.packages.find]
+include = ["pmr171_logo*"]

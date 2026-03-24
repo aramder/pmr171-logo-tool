@@ -1,0 +1,242 @@
+"""Binary patching of PMR-171 firmware for boot logo replacement."""
+
+from __future__ import annotations
+
+import struct
+from pathlib import Path
+
+from .constants import (
+    CASE6_MODEL_BL_OFFSET,
+    CASE_COORDS,
+    DEFAULT_IMAGE_SECTOR,
+    FLASH_BASE,
+    HEADER_SIZE,
+    NOP_NOP,
+    LITPOOL_OFFSET,
+    PMETHODS_16BPP,
+    SCREEN_H,
+    SCREEN_W,
+    SECTOR_SIZE,
+    SHARED_VERSION_BL_OFFSET,
+)
+
+FIRMWARE_SIZE = 2 * 1024 * 1024  # 2 MB
+
+
+# ---------------------------------------------------------------------------
+# emWin header
+# ---------------------------------------------------------------------------
+def build_bitmap_header(
+    width: int,
+    height: int,
+    data_flash_addr: int,
+    pmethods: int = PMETHODS_16BPP,
+) -> bytes:
+    """Build a 20-byte emWin GUI_BITMAP header for RGB565."""
+    return struct.pack(
+        "<HHHHIII",
+        width,
+        height,
+        width * 2,  # BytesPerLine
+        16,  # BitsPerPixel
+        data_flash_addr,
+        0,  # pPal (NULL for RGB565)
+        pmethods,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Patch list
+# ---------------------------------------------------------------------------
+class Patch:
+    """A single binary edit: replace bytes at *offset* in the firmware."""
+
+    __slots__ = ("offset", "data", "desc")
+
+    def __init__(self, offset: int, data: bytes, desc: str) -> None:
+        self.offset = offset
+        self.data = data
+        self.desc = desc
+
+    def __repr__(self) -> str:
+        addr = FLASH_BASE + self.offset
+        return f"<Patch {addr:#010x} {len(self.data):,}B {self.desc!r}>"
+
+
+def plan_patches(
+    fw: bytes | bytearray,
+    pixel_data: bytes,
+    img_w: int,
+    img_h: int,
+    *,
+    sector: int = DEFAULT_IMAGE_SECTOR,
+    patch_all_cases: bool = False,
+    remove_model_text: bool = False,
+    remove_all_text: bool = False,
+) -> list[Patch]:
+    """Build the list of patches required to install a new boot logo.
+
+    Parameters
+    ----------
+    fw:
+        Original 2 MB firmware binary.
+    pixel_data:
+        BGR565 LE pixel bytes (from ``image_to_bgr565_le``).
+    img_w, img_h:
+        Image dimensions in pixels.
+    sector:
+        Flash sector for image storage (10-13, must be erased).
+    patch_all_cases:
+        If True, update draw coordinates for all 5 model cases
+        (Q900/TBR-119/PMR-119/PMR-171/XP-100).  Default: PMR-171 only.
+    remove_model_text:
+        NOP the model-name text draw (case 6 only).
+    remove_all_text:
+        NOP both model-name AND version-text draws.
+
+    Returns
+    -------
+    List of ``Patch`` objects ready to apply.
+    """
+    sector_offset = sector * SECTOR_SIZE
+    header_addr = FLASH_BASE + sector_offset
+    data_addr = header_addr + HEADER_SIZE
+    header = build_bitmap_header(img_w, img_h, data_addr)
+
+    patches: list[Patch] = []
+
+    # 1. Image data (header + pixels) in the target sector.
+    patches.append(Patch(
+        sector_offset,
+        header + pixel_data,
+        f"{img_w}x{img_h} BGR565 image in sector {sector}",
+    ))
+
+    # 2. Redirect the literal pool pointer to the new header.
+    old_ptr = struct.unpack_from("<I", fw, LITPOOL_OFFSET)[0]
+    patches.append(Patch(
+        LITPOOL_OFFSET,
+        struct.pack("<I", header_addr),
+        f"literal pool {old_ptr:#010x} -> {header_addr:#010x}",
+    ))
+
+    # 3. Draw coordinates (centre the image on the 320x240 screen).
+    cx = max(0, (SCREEN_W - img_w) // 2)
+    cy = max(0, (SCREEN_H - img_h) // 2)
+    if cx > 255 or cy > 255:
+        raise ValueError(
+            f"Centering offset ({cx}, {cy}) exceeds Thumb movs "
+            f"immediate range (0-255).  Image too small?"
+        )
+
+    cases = CASE_COORDS.keys() if patch_all_cases else [6]
+    for case_num in cases:
+        y_off, x_off, label = CASE_COORDS[case_num]
+        patches.append(Patch(
+            y_off, bytes([cy]),
+            f"case {case_num} ({label}) Y: {fw[y_off]} -> {cy}",
+        ))
+        patches.append(Patch(
+            x_off, bytes([cx]),
+            f"case {case_num} ({label}) X: {fw[x_off]} -> {cx}",
+        ))
+
+    # 4. NOP text overlay BL instructions.
+    if remove_model_text or remove_all_text:
+        patches.append(Patch(
+            CASE6_MODEL_BL_OFFSET, NOP_NOP,
+            "NOP case 6 model-name bl",
+        ))
+    if remove_all_text:
+        patches.append(Patch(
+            SHARED_VERSION_BL_OFFSET, NOP_NOP,
+            "NOP shared version-text bl (all models)",
+        ))
+
+    return patches
+
+
+def apply_patches(fw: bytearray, patches: list[Patch]) -> None:
+    """Apply a list of patches to a mutable firmware buffer."""
+    for p in patches:
+        fw[p.offset: p.offset + len(p.data)] = p.data
+
+
+# ---------------------------------------------------------------------------
+# Sector validation
+# ---------------------------------------------------------------------------
+def check_sector_erased(
+    fw: bytes | bytearray,
+    sector: int,
+    needed: int,
+) -> list[str]:
+    """Return a list of warning strings if target sectors aren't erased."""
+    warnings: list[str] = []
+    sectors_needed = (needed + SECTOR_SIZE - 1) // SECTOR_SIZE
+
+    for s in range(sectors_needed):
+        s_num = sector + s
+        s_off = s_num * SECTOR_SIZE
+        s_end = s_off + SECTOR_SIZE
+
+        if s_end > len(fw):
+            warnings.append(
+                f"Sector {s_num} extends beyond firmware "
+                f"({s_end:#x} > {len(fw):#x})."
+            )
+            continue
+
+        non_ff = sum(1 for b in fw[s_off:s_end] if b != 0xFF)
+        if non_ff > 0:
+            warnings.append(
+                f"Sector {s_num} has {non_ff:,} non-0xFF bytes "
+                f"(not fully erased)."
+            )
+
+    return warnings
+
+
+# ---------------------------------------------------------------------------
+# High-level: patch a complete firmware
+# ---------------------------------------------------------------------------
+def patch_firmware(
+    firmware_path: Path,
+    pixel_data: bytes,
+    img_w: int,
+    img_h: int,
+    output_path: Path,
+    *,
+    sector: int = DEFAULT_IMAGE_SECTOR,
+    patch_all_cases: bool = False,
+    remove_model_text: bool = False,
+    remove_all_text: bool = False,
+) -> list[Patch]:
+    """Load firmware, apply boot-logo patches, save the result.
+
+    Returns the list of patches that were applied.
+    """
+    fw = bytearray(firmware_path.read_bytes())
+    if len(fw) != FIRMWARE_SIZE:
+        raise ValueError(
+            f"Firmware size {len(fw):,} != expected {FIRMWARE_SIZE:,}."
+        )
+
+    total_size = HEADER_SIZE + len(pixel_data)
+
+    # Warn (but don't block) if sectors aren't erased.
+    warnings = check_sector_erased(fw, sector, total_size)
+
+    patches = plan_patches(
+        fw, pixel_data, img_w, img_h,
+        sector=sector,
+        patch_all_cases=patch_all_cases,
+        remove_model_text=remove_model_text,
+        remove_all_text=remove_all_text,
+    )
+
+    apply_patches(fw, patches)
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_bytes(fw)
+
+    return patches
