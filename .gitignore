@@ -24,7 +24,7 @@ venv/
 Thumbs.db
 
 # Firmware binaries (user-supplied, not committed)
-firmware/*.bin
+*.bin
 
 # Personal / custom boot images (not committed)
 *callsign*
