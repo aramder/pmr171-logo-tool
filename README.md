@@ -53,7 +53,13 @@ pip install -e .
 # 1. Place the OEM FW-NEW.bin in the firmware/ directory:
 #    firmware/FW-NEW.bin
 
-# 2. Basic: letterbox your image on a black background, remove text overlays
+# 2. Recommended: universal mode (works on all 8 radio models, no text overlays)
+python cli.py patch mylogo.png --universal --resize fill
+
+# Letterbox on black background (all models):
+python cli.py patch mylogo.png --universal
+
+# PMR-171 only (legacy mode): letterbox, remove text overlays
 python cli.py patch mylogo.png --no-text
 
 # Fill the screen (crop-to-cover):
@@ -101,6 +107,7 @@ python cli.py patch <image> [options]
 | `-o`, `--output` | `FW-NEW.bin` | Output USB update file |
 | `--resize` | `fit` | `fit` (letterbox), `fill` (crop), `stretch`, `none` |
 | `--bg-color` | `#000000` | Letterbox background color |
+| `--universal` | off | All-model mode: bypasses the per-model switch (recommended) |
 | `--no-text` | off | Remove model name + version text overlays |
 | `--no-model-text` | off | Remove model name only |
 | `--all-models` | off | Patch coordinates for all PMR-171 model variants |
@@ -134,17 +141,16 @@ The PMR-171 uses **STemWin** (emWin) for its GUI.  Boot logos are stored as:
 - **20-byte emWin `GUI_BITMAP` header** — dimensions, stride, pixel data pointer, draw-method vtable
 - **Raw BGR565 pixel data** — 16-bit little-endian, blue in high bits (matching the LT7680/ST7789V LCD panel)
 
-For a full-screen 320×240 image: 20 + 153,600 = **153,620 bytes** (~150 KB, fits in one 128 KB sector).
+For a full-screen 320×240 image: 20 + 153,600 = **153,620 bytes** (~150 KB, spanning two 128 KB flash sectors).
 
 ### Patching Procedure
 
 1. Convert the input image to BGR565 LE pixel data
 2. Build an emWin `GUI_BITMAP` header pointing to the pixel data
 3. Write header + pixels into an erased flash sector (default: sector 10)
-4. Patch the literal pool pointer in the splash screen function to point to the new header
-5. Update draw coordinates to centre the image on screen
-6. Optionally NOP the model-name and version-text overlay `bl` instructions
-7. Extract Bank 2, trim trailing `0xFF`, write as `FW-NEW.bin`
+4. **Universal mode** (`--universal`): Overwrite the switch dispatch with a 20-byte Thumb-2 stub that unconditionally draws the bitmap at (0, 0) and branches to the function epilogue — skips all per-model logic and text rendering
+5. **Legacy mode** (default): Patch the literal pool pointer, update per-model draw coordinates, and optionally NOP text overlay `bl` instructions
+6. Extract Bank 2, trim trailing `0xFF`, write as `FW-NEW.bin`
 
 ### USB Bootloader Update
 
@@ -182,7 +188,7 @@ The tool accepts the **OEM `FW-NEW.bin`** (~1.1 MB) — the USB update file dist
 - **Best results**: Use a 320×240 image — no resizing needed
 - **Aspect ratio**: The `fit` mode (default) letterboxes with black bars; `fill` crops to cover
 - **Transparency**: RGBA images are composited onto the background color
-- **colors**: The 16-bit BGR565 format has 65,536 colors — gradients may show banding
+- **Colors**: The 16-bit BGR565 format has 65,536 colors — gradients may show banding
 - **File size**: A full-screen image uses ~150 KB of the ~1.7 MB available flash
 
 ## Supported Radios
@@ -201,6 +207,16 @@ All of the following Guohetec SDR transceivers run the **same firmware binary** 
 | **MX-1000** | Guohetec | Also known internally as XP-100 |
 
 All eight share the same STM32H7 MCU, 320×240 LCD, emWin GUI, and UHSDR-derived bootloader.  Differences between models are limited to Bluetooth device name, RF band-switching tables, IMU axis orientation, and on-screen branding — none of which affect the boot logo.
+
+### Universal Mode (Recommended)
+
+Use `--universal` to bypass the per-model switch statement entirely.  This mode works on **all 8 models** — regardless of the EEPROM model-index byte, the radio will display your custom boot logo with no text overlays:
+
+```bash
+python cli.py patch mylogo.png --universal --resize fill
+```
+
+The stub replaces the firmware's model-selection logic with a short sequence that unconditionally draws your image at (0, 0) and returns.  Since the switch is never reached, it works identically on every model and is fully testable on any single unit.
 
 ## Firmware Compatibility
 

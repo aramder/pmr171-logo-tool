@@ -10,6 +10,7 @@ from .constants import (
     FLASH_BASE,
     FLASH_SIZE,
     FLASHRESERVED_OPTIONS,
+    GUI_DRAWBITMAP_ADDR,
     HEADER_SIZE,
     LITPOOL_OFFSET,
     NOP_NOP,
@@ -18,14 +19,19 @@ from .constants import (
     SCREEN_W,
     SECTOR_SIZE,
     SHARED_VERSION_BL_OFFSET,
+    SPLASH_EPILOGUE_ADDR,
+    SPLASH_STUB_OFFSET,
+    SPLASH_STUB_SIZE,
 )
 from .firmware_patch import (
     Patch,
     apply_patches,
     build_bitmap_header,
+    build_universal_stub,
     check_sector_erased,
     patch_firmware,
     plan_patches,
+    plan_universal_patches,
 )
 from .fw_new import FwNewResult, load_firmware, make_fw_new
 from .image_convert import (
@@ -45,6 +51,7 @@ __all__ = [
     "FLASH_BASE",
     "FLASH_SIZE",
     "FLASHRESERVED_OPTIONS",
+    "GUI_DRAWBITMAP_ADDR",
     "HEADER_SIZE",
     "LITPOOL_OFFSET",
     "NOP_NOP",
@@ -53,13 +60,18 @@ __all__ = [
     "SCREEN_W",
     "SECTOR_SIZE",
     "SHARED_VERSION_BL_OFFSET",
+    "SPLASH_EPILOGUE_ADDR",
+    "SPLASH_STUB_OFFSET",
+    "SPLASH_STUB_SIZE",
     # firmware_patch
     "Patch",
     "apply_patches",
     "build_bitmap_header",
+    "build_universal_stub",
     "check_sector_erased",
     "patch_firmware",
     "plan_patches",
+    "plan_universal_patches",
     # fw_new
     "FwNewResult",
     "load_firmware",

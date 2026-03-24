@@ -10,6 +10,9 @@ Examples
   # Patch firmware with a custom image (uses firmware/FW-NEW.bin by default):
   pmr171-logo myimage.png
 
+  # Universal mode (all 8 radio models, no text overlays):
+  pmr171-logo myimage.png --universal --resize fill
+
   # Use "fill" mode (crop-to-cover) with no text overlays:
   pmr171-logo myimage.png --resize fill --no-text
 
@@ -37,6 +40,7 @@ from pmr171_logo.firmware_patch import (
     apply_patches,
     check_sector_erased,
     plan_patches,
+    plan_universal_patches,
 )
 from pmr171_logo.fw_new import load_firmware, make_fw_new
 from pmr171_logo.image_convert import image_to_bgr565_le, load_and_prepare
@@ -105,13 +109,26 @@ def cmd_patch(args: argparse.Namespace) -> int:
         print(f"  WARNING: {w}", file=sys.stderr)
 
     # -- Build & apply patches --
-    patches = plan_patches(
-        fw, pixel_data, img_w, img_h,
-        sector=sector,
-        patch_all_cases=args.all_models,
-        remove_model_text=args.no_model_text,
-        remove_all_text=args.no_text,
-    )
+    if args.universal:
+        if img_w != SCREEN_W or img_h != SCREEN_H:
+            print(
+                f"  WARNING: Universal mode draws at (0,0). Image is "
+                f"{img_w}x{img_h}, not {SCREEN_W}x{SCREEN_H}. "
+                f"Consider using --resize fit/fill/stretch.",
+                file=sys.stderr,
+            )
+        patches = plan_universal_patches(
+            fw, pixel_data, img_w, img_h,
+            sector=sector,
+        )
+    else:
+        patches = plan_patches(
+            fw, pixel_data, img_w, img_h,
+            sector=sector,
+            patch_all_cases=args.all_models,
+            remove_model_text=args.no_model_text,
+            remove_all_text=args.no_text,
+        )
     apply_patches(fw, patches)
 
     # -- Print patch summary --
@@ -207,6 +224,16 @@ def main() -> int:
         "--all-models",
         action="store_true",
         help="Patch logo coordinates for all model variants (not just PMR-171)",
+    )
+    p_patch.add_argument(
+        "--universal",
+        action="store_true",
+        help=(
+            "Universal mode: bypass the per-model switch statement entirely. "
+            "Works on all 8 Guohetec radio models (Q900, HS2, QR20, TBR-119, "
+            "PMR-119, SJR-188, PMR-171, MX-1000). Draws the image full-screen "
+            "at (0,0) with no text overlays. Recommended with --resize fit or fill."
+        ),
     )
     p_patch.add_argument(
         "--sector",

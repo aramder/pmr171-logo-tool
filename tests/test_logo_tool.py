@@ -21,12 +21,16 @@ from pmr171_logo.constants import (
     DEFAULT_IMAGE_SECTOR,
     FLASH_BASE,
     FLASH_SIZE,
+    GUI_DRAWBITMAP_ADDR,
     HEADER_SIZE,
     LITPOOL_OFFSET,
     PMETHODS_16BPP,
     SCREEN_H,
     SCREEN_W,
     SECTOR_SIZE,
+    SPLASH_EPILOGUE_ADDR,
+    SPLASH_STUB_OFFSET,
+    SPLASH_STUB_SIZE,
 )
 from pmr171_logo.image_convert import (
     image_to_bgr565_le,
@@ -36,8 +40,10 @@ from pmr171_logo.image_convert import (
 from pmr171_logo.firmware_patch import (
     apply_patches,
     build_bitmap_header,
+    build_universal_stub,
     check_sector_erased,
     plan_patches,
+    plan_universal_patches,
 )
 from pmr171_logo.fw_new import load_firmware, make_fw_new
 
@@ -353,8 +359,159 @@ class TestLoadFirmware:
             load_firmware(p)
 
 
+# ---------------------------------------------------------------------------# Universal stub tests
 # ---------------------------------------------------------------------------
-# Integration test
+class TestUniversalStub:
+    """Verify the Thumb-2 stub that bypasses the per-model switch."""
+
+    def test_stub_size(self):
+        stub = build_universal_stub(0x08140000)
+        assert len(stub) == SPLASH_STUB_SIZE
+
+    def test_stub_contains_bitmap_addr(self):
+        addr = 0x08140000
+        stub = build_universal_stub(addr)
+        # The last 4 bytes should be the bitmap header address (LE).
+        embedded = struct.unpack_from("<I", stub, 16)[0]
+        assert embedded == addr
+
+    def test_stub_different_sectors(self):
+        """Different sector addresses produce different stubs."""
+        stub10 = build_universal_stub(0x08140000)
+        stub11 = build_universal_stub(0x08160000)
+        # Code portion (first 16 bytes) is identical.
+        assert stub10[:16] == stub11[:16]
+        # Literal (last 4 bytes) differs.
+        assert stub10[16:] != stub11[16:]
+
+    def test_stub_valid_thumb2(self):
+        """Verify the stub disassembles to valid Thumb-2 instructions."""
+        try:
+            from capstone import Cs, CS_ARCH_ARM, CS_MODE_THUMB
+        except ImportError:
+            pytest.skip("capstone not installed")
+
+        bitmap_addr = FLASH_BASE + DEFAULT_IMAGE_SECTOR * SECTOR_SIZE
+        stub = build_universal_stub(bitmap_addr)
+        md = Cs(CS_ARCH_ARM, CS_MODE_THUMB)
+
+        stub_addr = FLASH_BASE + SPLASH_STUB_OFFSET
+        insns = list(md.disasm(stub[:16], stub_addr))
+
+        # Should produce 7 instructions: ldr, movs, movs, bl, b, nop, nop
+        assert len(insns) == 7
+
+        # First: ldr r0, [pc, ...]
+        assert insns[0].mnemonic == "ldr"
+        assert "r0" in insns[0].op_str
+        assert "pc" in insns[0].op_str
+
+        # movs r1, #0
+        assert insns[1].mnemonic == "movs"
+        assert insns[1].op_str == "r1, #0"
+
+        # movs r2, #0
+        assert insns[2].mnemonic == "movs"
+        assert insns[2].op_str == "r2, #0"
+
+        # bl GUI_DrawBitmap
+        assert insns[3].mnemonic == "bl"
+        assert f"#{hex(GUI_DRAWBITMAP_ADDR)}" in insns[3].op_str
+
+        # b epilogue
+        assert insns[4].mnemonic == "b"
+        assert f"#{hex(SPLASH_EPILOGUE_ADDR)}" in insns[4].op_str
+
+        # Two NOPs
+        assert insns[5].mnemonic == "nop"
+        assert insns[6].mnemonic == "nop"
+
+
+class TestUniversalPatches:
+    """Test plan_universal_patches() produces correct patches."""
+
+    def test_patch_count(self):
+        fw = _make_synthetic_firmware()
+        pixels = b"\x00\x00" * (SCREEN_W * SCREEN_H)
+        patches = plan_universal_patches(fw, pixels, SCREEN_W, SCREEN_H)
+        # Exactly 2 patches: image data + stub
+        assert len(patches) == 2
+
+    def test_image_patch_in_sector(self):
+        fw = _make_synthetic_firmware()
+        pixels = b"\xFF\xFF" * (100 * 100)
+        patches = plan_universal_patches(fw, pixels, 100, 100, sector=11)
+        img_patch = patches[0]
+        assert img_patch.offset == 11 * SECTOR_SIZE
+        assert len(img_patch.data) == HEADER_SIZE + len(pixels)
+
+    def test_stub_patch_at_correct_offset(self):
+        fw = _make_synthetic_firmware()
+        pixels = b"\x00\x00" * (100 * 100)
+        patches = plan_universal_patches(fw, pixels, 100, 100)
+        stub_patch = patches[1]
+        assert stub_patch.offset == SPLASH_STUB_OFFSET
+        assert len(stub_patch.data) == SPLASH_STUB_SIZE
+
+    def test_stub_references_image_header(self):
+        """The stub's inline literal must point to the image header."""
+        fw = _make_synthetic_firmware()
+        pixels = b"\x00\x00" * (100 * 100)
+        sector = 12
+        patches = plan_universal_patches(fw, pixels, 100, 100, sector=sector)
+        stub_patch = patches[1]
+        # Last 4 bytes of stub = the bitmap header address
+        embedded_addr = struct.unpack_from("<I", stub_patch.data, 16)[0]
+        expected_addr = FLASH_BASE + sector * SECTOR_SIZE
+        assert embedded_addr == expected_addr
+
+    def test_does_not_touch_litpool(self):
+        """Universal mode should NOT patch the literal pool."""
+        fw = _make_synthetic_firmware()
+        pixels = b"\x00\x00" * (100 * 100)
+        patches = plan_universal_patches(fw, pixels, 100, 100)
+        offsets = {p.offset for p in patches}
+        assert LITPOOL_OFFSET not in offsets
+
+    def test_apply_and_generate_fw_new(self):
+        """Patched firmware should produce a valid FW-NEW.bin."""
+        fw = _make_synthetic_firmware()
+        pixels = b"\x00\x00" * (SCREEN_W * SCREEN_H)
+        patches = plan_universal_patches(fw, pixels, SCREEN_W, SCREEN_H)
+        apply_patches(fw, patches)
+        result = make_fw_new(bytes(fw))
+        assert len(result.data) > 0
+        assert result.data[-1] != 0xFF
+
+    def test_only_expected_offsets_modified(self):
+        """Verify only the image sector and stub bytes are changed."""
+        fw = _make_synthetic_firmware()
+        original = bytes(fw)
+        pixels = b"\x00\x00" * (10 * 10)
+        patches = plan_universal_patches(fw, pixels, 10, 10)
+        apply_patches(fw, patches)
+
+        # Collect all modified byte indices
+        changed = set()
+        for i in range(len(fw)):
+            if fw[i] != original[i]:
+                changed.add(i)
+
+        # All changes should be within the image sector or the stub
+        img_start = DEFAULT_IMAGE_SECTOR * SECTOR_SIZE
+        img_end = img_start + HEADER_SIZE + len(pixels)
+        stub_start = SPLASH_STUB_OFFSET
+        stub_end = stub_start + SPLASH_STUB_SIZE
+
+        for idx in changed:
+            in_image = img_start <= idx < img_end
+            in_stub = stub_start <= idx < stub_end
+            assert in_image or in_stub, (
+                f"Unexpected change at offset 0x{idx:06X}"
+            )
+
+
+# ---------------------------------------------------------------------------# Integration test
 # ---------------------------------------------------------------------------
 class TestEndToEnd:
     """Full pipeline: image → patches → FW-NEW.bin."""
@@ -397,3 +554,36 @@ class TestEndToEnd:
         result.write(out)
         assert out.exists()
         assert out.stat().st_size == len(result.data)
+
+    def test_universal_pipeline(self, tmp_path):
+        """Full pipeline using universal (all-model) mode."""
+        img = Image.new("RGB", (SCREEN_W, SCREEN_H), (255, 0, 128))
+        img_path = tmp_path / "universal_logo.png"
+        img.save(img_path)
+
+        prepared = load_and_prepare(str(img_path), "fill")
+        pixel_data = image_to_bgr565_le(prepared)
+
+        fw = _make_synthetic_firmware()
+        patches = plan_universal_patches(fw, pixel_data, SCREEN_W, SCREEN_H)
+        apply_patches(fw, patches)
+
+        # Verify stub was written at the correct offset.
+        assert fw[SPLASH_STUB_OFFSET + 16:SPLASH_STUB_OFFSET + 20] == struct.pack(
+            "<I", FLASH_BASE + DEFAULT_IMAGE_SECTOR * SECTOR_SIZE
+        )
+
+        # Verify image header was written.
+        sector_off = DEFAULT_IMAGE_SECTOR * SECTOR_SIZE
+        xs, ys = struct.unpack_from("<HH", fw, sector_off)
+        assert xs == SCREEN_W
+        assert ys == SCREEN_H
+
+        # Generate FW-NEW.bin.
+        result = make_fw_new(bytes(fw))
+        assert len(result.data) > 0
+        assert len(result.size_warnings) == 0
+
+        out = tmp_path / "FW-NEW.bin"
+        result.write(out)
+        assert out.exists()

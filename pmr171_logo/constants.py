@@ -65,6 +65,28 @@ SHARED_VERSION_BL_OFFSET = 0x0009_0518
 # Two 16-bit Thumb NOPs — replaces a 32-bit BL instruction.
 NOP_NOP = b"\x00\xBF\x00\xBF"
 
+# ---------------------------------------------------------------------------
+# Universal stub (Approach B — bypass switch, all models)
+#
+# Overwrites the switch dispatch (cmp/bhi/tbb) starting at 0x080904D8
+# with a short Thumb-2 stub that unconditionally draws the custom bitmap
+# at (0, 0) and branches directly to the function epilogue.
+# ---------------------------------------------------------------------------
+
+# Start of the stub: overwrites ``cmp r0, #7`` (first switch instruction).
+SPLASH_STUB_OFFSET = 0x0009_04D8
+
+# Bytes overwritten: 16 bytes of code + 4 bytes inline literal = 20 total.
+SPLASH_STUB_SIZE = 20
+
+# Function epilogue: ``add sp, #0x18; pop {r4, pc}`` at 0x0809051C.
+# The stub branches here after drawing, skipping all text rendering.
+SPLASH_EPILOGUE_ADDR = 0x0809_051C
+
+# Resolved address of GUI_DrawBitmap(const GUI_BITMAP *pBM, int x, int y).
+# Called by all 8 switch cases in the original function.
+GUI_DRAWBITMAP_ADDR = 0x0809_9170
+
 # Default flash sector for new image data (sector 10 = 0x08140000).
 # Sectors 10-13 are typically erased in the stock firmware.
 DEFAULT_IMAGE_SECTOR = 10
