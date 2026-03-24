@@ -1,6 +1,6 @@
 """Unit tests for image conversion, firmware patching, and FW-NEW generation.
 
-Uses a synthetic 2 MB firmware blob — no real firmware dump needed.
+Uses a synthetic 2 MB firmware blob — no real firmware needed.
 """
 
 from __future__ import annotations
@@ -39,7 +39,7 @@ from pmr171_logo.firmware_patch import (
     check_sector_erased,
     plan_patches,
 )
-from pmr171_logo.fw_new import make_fw_new
+from pmr171_logo.fw_new import load_firmware, make_fw_new
 
 
 # ---------------------------------------------------------------------------
@@ -280,6 +280,77 @@ class TestMakeFwNew:
         result_with_config = make_fw_new(bytes(fw), include_config=True)
         # With config excluded, the output should be smaller.
         assert len(result_no_config.data) < len(result_with_config.data)
+
+
+# ---------------------------------------------------------------------------
+# Firmware loading tests (OEM FW-NEW.bin → 2 MB image)
+# ---------------------------------------------------------------------------
+class TestLoadFirmware:
+
+    def test_load_2mb_file(self, tmp_path):
+        """A 2 MB file is returned as-is."""
+        fw = _make_synthetic_firmware()
+        p = tmp_path / "full.bin"
+        p.write_bytes(fw)
+        loaded = load_firmware(p)
+        assert len(loaded) == FLASH_SIZE
+        assert loaded == fw
+
+    def test_load_oem_fw_new(self, tmp_path):
+        """An OEM FW-NEW.bin is expanded to a full 2 MB image."""
+        fw = _make_synthetic_firmware()
+        # Simulate OEM file: extract Bank 2 and trim trailing 0xFF.
+        result = make_fw_new(bytes(fw))
+        p = tmp_path / "FW-NEW.bin"
+        p.write_bytes(result.data)
+
+        loaded = load_firmware(p)
+        assert len(loaded) == FLASH_SIZE
+        # Bank 1 should be 0xFF (no bootloader in reconstruction).
+        assert loaded[:APP_OFFSET] == b"\xFF" * APP_OFFSET
+        # Bank 2 vector table should be intact.
+        sp, reset = struct.unpack_from("<II", loaded, APP_OFFSET)
+        assert sp == 0x2407FFF8
+        assert reset == 0x08030001
+
+    def test_load_oem_patches_correctly(self, tmp_path):
+        """Patching works identically on OEM-loaded firmware."""
+        fw = _make_synthetic_firmware()
+        result = make_fw_new(bytes(fw))
+        p = tmp_path / "FW-NEW.bin"
+        p.write_bytes(result.data)
+
+        loaded = load_firmware(p)
+        pixels = b"\x00\x00" * (100 * 100)
+        patches = plan_patches(loaded, pixels, 100, 100)
+        apply_patches(loaded, patches)
+
+        # Should produce a valid FW-NEW.bin from the patched result.
+        out = make_fw_new(bytes(loaded))
+        assert len(out.data) > 0
+
+    def test_empty_file_raises(self, tmp_path):
+        p = tmp_path / "empty.bin"
+        p.write_bytes(b"")
+        with pytest.raises(ValueError, match="empty"):
+            load_firmware(p)
+
+    def test_too_large_raises(self, tmp_path):
+        p = tmp_path / "big.bin"
+        p.write_bytes(b"\xFF" * (FLASH_SIZE + 1))
+        with pytest.raises(ValueError, match="too large"):
+            load_firmware(p)
+
+    def test_bad_vector_table_raises(self, tmp_path):
+        p = tmp_path / "bad.bin"
+        p.write_bytes(b"\x00" * 1024)
+        with pytest.raises(ValueError, match="Invalid"):
+            load_firmware(p)
+
+    def test_missing_file_raises(self, tmp_path):
+        p = tmp_path / "nonexistent.bin"
+        with pytest.raises(FileNotFoundError):
+            load_firmware(p)
 
 
 # ---------------------------------------------------------------------------

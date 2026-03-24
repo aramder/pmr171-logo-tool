@@ -1,23 +1,20 @@
 #!/usr/bin/env python3
 """PMR-171 Boot Logo Tool — patch any image into the radio's boot screen.
 
-Takes an image (PNG, JPEG, BMP, etc.) and a stock PMR-171 firmware dump,
-produces a patched firmware with the custom boot logo, and optionally
-generates a FW-NEW.bin for USB bootloader update.
+Takes an image (PNG, JPEG, BMP, etc.) and the OEM firmware update file
+(FW-NEW.bin), produces a patched firmware with the custom boot logo,
+and generates a new FW-NEW.bin for USB bootloader update.
 
 Examples
 --------
-  # Patch firmware with a custom image, output FW-NEW.bin:
-  pmr171-logo myimage.png -f firmware.bin
+  # Patch firmware with a custom image (uses firmware/FW-NEW.bin by default):
+  pmr171-logo myimage.png
 
   # Use "fill" mode (crop-to-cover) with no text overlays:
-  pmr171-logo myimage.png -f firmware.bin --resize fill --no-text
+  pmr171-logo myimage.png --resize fill --no-text
 
-  # Output a full 2 MB patched dump (for SWD flashing):
-  pmr171-logo myimage.png -f firmware.bin --output-dump patched.bin
-
-  # Only generate FW-NEW.bin from an already-patched dump:
-  pmr171-logo --fw-new-only patched.bin -o FW-NEW.bin
+  # Specify a different firmware file:
+  pmr171-logo myimage.png -f path/to/FW-NEW.bin
 """
 
 from __future__ import annotations
@@ -41,8 +38,11 @@ from pmr171_logo.firmware_patch import (
     check_sector_erased,
     plan_patches,
 )
-from pmr171_logo.fw_new import make_fw_new
+from pmr171_logo.fw_new import load_firmware, make_fw_new
 from pmr171_logo.image_convert import image_to_bgr565_le, load_and_prepare
+
+# Default location for the OEM firmware file within the repo.
+DEFAULT_FIRMWARE_PATH = Path(__file__).resolve().parent / "firmware" / "FW-NEW.bin"
 
 
 def _parse_hex_color(s: str) -> tuple[int, int, int]:
@@ -62,15 +62,22 @@ def cmd_patch(args: argparse.Namespace) -> int:
     fw_path = Path(args.firmware)
     if not fw_path.exists():
         print(f"ERROR: Firmware not found: {fw_path}", file=sys.stderr)
+        if fw_path == DEFAULT_FIRMWARE_PATH:
+            print(
+                "  Place the OEM FW-NEW.bin in the firmware/ directory.",
+                file=sys.stderr,
+            )
         return 1
 
     print(f"Loading firmware: {fw_path}")
-    fw = bytearray(fw_path.read_bytes())
-    if len(fw) != FIRMWARE_SIZE:
-        print(
-            f"  WARNING: Size {len(fw):,} != expected {FIRMWARE_SIZE:,}",
-            file=sys.stderr,
-        )
+    try:
+        fw = load_firmware(fw_path)
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+    if len(fw_path.read_bytes()) < FIRMWARE_SIZE:
+        print(f"  OEM FW-NEW.bin ({len(fw_path.read_bytes()):,} bytes) "
+              f"-> reconstructed 2 MB flash image")
 
     # -- Image processing --
     print(f"Processing image: {args.image}")
@@ -114,13 +121,6 @@ def cmd_patch(args: argparse.Namespace) -> int:
         addr = FLASH_BASE + p.offset
         print(f"  {i:2d}. [{addr:#010x}] {len(p.data):>7,} B  {p.desc}")
 
-    # -- Write full patched dump (optional, for SWD) --
-    if args.output_dump:
-        dump_path = Path(args.output_dump)
-        dump_path.parent.mkdir(parents=True, exist_ok=True)
-        dump_path.write_bytes(fw)
-        print(f"\nPatched dump: {dump_path}  ({len(fw):,} bytes)")
-
     # -- Generate FW-NEW.bin --
     output_path = Path(args.output)
     result = make_fw_new(bytes(fw), include_config=args.include_config)
@@ -138,27 +138,6 @@ def cmd_patch(args: argparse.Namespace) -> int:
     print("  2. Insert the USB stick into the PMR-171")
     print("  3. Power on — the bootloader will flash automatically")
 
-    return 0
-
-
-def cmd_fw_new_only(args: argparse.Namespace) -> int:
-    """Generate FW-NEW.bin from an already-patched 2MB dump."""
-    fw_path = Path(args.firmware)
-    if not fw_path.exists():
-        print(f"ERROR: Not found: {fw_path}", file=sys.stderr)
-        return 1
-
-    print(f"Loading: {fw_path}")
-    firmware = fw_path.read_bytes()
-
-    result = make_fw_new(firmware, include_config=args.include_config)
-    for w in result.size_warnings:
-        print(f"  WARNING: {w}", file=sys.stderr)
-
-    output_path = Path(args.output)
-    result.write(output_path)
-    print(f"FW-NEW.bin: {output_path}  ({len(result.data):,} bytes)")
-    print(f"  SHA-256: {result.sha256_short}...")
     return 0
 
 
@@ -189,18 +168,16 @@ def main() -> int:
     )
     p_patch.add_argument(
         "-f", "--firmware",
-        required=True,
-        help="Stock firmware dump (2 MB .bin file)",
+        default=str(DEFAULT_FIRMWARE_PATH),
+        help=(
+            "OEM FW-NEW.bin firmware update file "
+            f"(default: firmware/FW-NEW.bin)"
+        ),
     )
     p_patch.add_argument(
         "-o", "--output",
         default="FW-NEW.bin",
         help="Output FW-NEW.bin path (default: FW-NEW.bin)",
-    )
-    p_patch.add_argument(
-        "--output-dump",
-        metavar="FILE",
-        help="Also save the full 2 MB patched dump (for SWD flashing)",
     )
     p_patch.add_argument(
         "--resize",
@@ -250,36 +227,10 @@ def main() -> int:
         help="Save a PNG preview of the processed image",
     )
 
-    # ── fw-new ──
-    p_fwnew = sub.add_parser(
-        "fw-new",
-        help="Generate FW-NEW.bin from an already-patched dump.",
-        description=(
-            "Extract Bank 2 application region from a 2 MB dump "
-            "and generate FW-NEW.bin for USB bootloader update."
-        ),
-    )
-    p_fwnew.add_argument(
-        "firmware",
-        help="2 MB firmware dump (.bin)",
-    )
-    p_fwnew.add_argument(
-        "-o", "--output",
-        default="FW-NEW.bin",
-        help="Output path (default: FW-NEW.bin)",
-    )
-    p_fwnew.add_argument(
-        "--include-config",
-        action="store_true",
-        help="Include config/calibration region in output",
-    )
-
     args = parser.parse_args()
 
     if args.command == "patch":
         return cmd_patch(args)
-    elif args.command == "fw-new":
-        return cmd_fw_new_only(args)
     else:
         parser.print_help()
         return 0

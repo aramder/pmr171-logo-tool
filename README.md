@@ -1,26 +1,36 @@
 # PMR-171 Boot Logo Tool
 
-Patch any image into your **Guohetec PMR-171** SDR transceiver's boot screen and generate a ready-to-flash USB update file.
+Patch any image into your **Guohetec** SDR transceiver's boot screen and generate a ready-to-flash USB update file.
 
-> **No soldering.  No SWD debugger.  Just a USB stick.**
+Works with the **PMR-171** and all related models — they share a single firmware binary.
+
+> **No soldering.  No debugger.  Just a USB stick.**
+
+> [!CAUTION]
+> **This tool is ONLY compatible with Guohetec firmware v3.7.2.**
+> Using it with any other firmware version may produce a non-functional update file that could
+> brick your radio.
+> **Do NOT use this tool with a firmware version other than the one listed below.**
+> See [Firmware Compatibility](#firmware-compatibility) for details.
 
 ## What It Does
 
 ```
-your_logo.png  +  firmware.bin  →  FW-NEW.bin (USB stick)  →  Radio boots with your image
+your_logo.png  +  FW-NEW.bin (OEM)  →  FW-NEW.bin (patched)  →  Radio boots with your image
 ```
 
-1. Takes any image (PNG, JPEG, BMP, etc.)
-2. Resizes/converts it for the PMR-171's 320×240 LCD (BGR565 format)
-3. Patches it into a copy of the stock firmware binary
-4. Generates `FW-NEW.bin` — the USB bootloader update file
-5. Put the file on a FAT32 USB stick, plug it in, and power on
+1. Download the **OEM firmware update** (`FW-NEW.bin`) and place it in the `firmware/` directory
+2. Takes any image (PNG, JPEG, BMP, etc.)
+3. Resizes/converts it for the radio's 320×240 LCD (BGR565 format)
+4. Patches it into a copy of the firmware
+5. Generates a new `FW-NEW.bin` — the USB bootloader update file
+6. Put the file on a FAT32 USB stick, plug it in, and power on
 
 ## Requirements
 
 - **Python 3.10+**
 - **Pillow** (image processing)
-- A **stock PMR-171 firmware dump** (2 MB `.bin` file)
+- The **OEM firmware update file** (`FW-NEW.bin`) from Guohetec — see [Obtaining the Firmware](#obtaining-the-firmware)
 - Optional: **numpy** for faster image conversion
 
 ## Installation
@@ -28,33 +38,38 @@ your_logo.png  +  firmware.bin  →  FW-NEW.bin (USB stick)  →  Radio boots wi
 ```bash
 # Clone / download this repo, then:
 cd pmr171-logo-tool
-pip install -e .
+pip install -r requirements.txt
+```
 
-# Or just use it directly:
-pip install Pillow
-python cli.py patch mylogo.png -f firmware.bin
+Or install as a package (editable mode):
+
+```bash
+pip install -e .
 ```
 
 ## Quick Start
 
 ```bash
-# Basic: letterbox your image on a black background, remove text overlays
-python cli.py patch mylogo.png -f firmware.bin --no-text
+# 1. Place the OEM FW-NEW.bin in the firmware/ directory:
+#    firmware/FW-NEW.bin
+
+# 2. Basic: letterbox your image on a black background, remove text overlays
+python cli.py patch mylogo.png --no-text
 
 # Fill the screen (crop-to-cover):
-python cli.py patch mylogo.png -f firmware.bin --resize fill --no-text
+python cli.py patch mylogo.png --resize fill --no-text
 
 # Stretch to fill (may distort):
-python cli.py patch mylogo.png -f firmware.bin --resize stretch
+python cli.py patch mylogo.png --resize stretch
 
 # Custom background colour for letterboxing:
-python cli.py patch mylogo.png -f firmware.bin --bg-color "#1a1a2e"
+python cli.py patch mylogo.png --bg-color "#1a1a2e"
 
-# Also save the full 2 MB patched dump (for SWD flashing):
-python cli.py patch mylogo.png -f firmware.bin --output-dump patched.bin
+# Specify a different firmware file:
+python cli.py patch mylogo.png -f path/to/other-firmware.bin
 
 # Generate a preview PNG of what the LCD will display:
-python cli.py patch mylogo.png -f firmware.bin --preview preview.png
+python cli.py patch mylogo.png --preview preview.png
 ```
 
 ### Output
@@ -77,14 +92,13 @@ To update the radio:
 ### `patch` — Image → Firmware (main command)
 
 ```
-python cli.py patch <image> -f <firmware.bin> [options]
+python cli.py patch <image> [options]
 ```
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `-f`, `--firmware` | *(required)* | Stock 2 MB firmware dump |
+| `-f`, `--firmware` | `firmware/FW-NEW.bin` | OEM firmware update file |
 | `-o`, `--output` | `FW-NEW.bin` | Output USB update file |
-| `--output-dump` | *(none)* | Also save full 2 MB patched dump for SWD |
 | `--resize` | `fit` | `fit` (letterbox), `fill` (crop), `stretch`, `none` |
 | `--bg-color` | `#000000` | Letterbox background colour |
 | `--no-text` | off | Remove model name + version text overlays |
@@ -93,14 +107,6 @@ python cli.py patch <image> -f <firmware.bin> [options]
 | `--sector` | `10` | Flash sector for image data (10–13) |
 | `--include-config` | off | Include config/calibration region in FW-NEW.bin |
 | `--preview` | *(none)* | Save a PNG preview of the processed image |
-
-### `fw-new` — Dump → FW-NEW.bin (no image patching)
-
-Convert an already-patched 2 MB firmware dump to the USB update format:
-
-```
-python cli.py fw-new patched_firmware.bin -o FW-NEW.bin
-```
 
 ## How It Works
 
@@ -150,13 +156,26 @@ The PMR-171's UHSDR-derived bootloader:
 4. Programs the file contents starting at `0x08020000`
 5. Reboots into the new firmware
 
-## Obtaining a Firmware Dump
+## Obtaining the Firmware
 
-You need a stock firmware dump to use as the base for patching.  Options:
+Place the OEM firmware update file in the `firmware/` directory:
 
-1. **From the manufacturer**: Check if Guohetec provides firmware update files.  If they distribute `FW-NEW.bin`, you'll need the full 2 MB dump instead.
-2. **SWD dump**: Read the flash via SWD using an ST-Link or J-Link debug probe.
-3. **Community**: Check PMR-171 community forums and groups.
+```
+firmware/
+  FW-NEW.bin   ← place it here
+```
+
+The tool accepts the **OEM `FW-NEW.bin`** (~1.1 MB) — the USB update file distributed by Guohetec.  The tool automatically reconstructs a full flash image from it internally.
+
+> [!IMPORTANT]
+> You **must** use firmware **v3.7.2** (1,127,552 bytes).  See [Firmware Compatibility](#firmware-compatibility).
+
+**How to get the OEM file:**
+
+1. Download **firmware v3.7.2** from the Guohetec download page: **https://www.guohedz.com/DOWNLOAD**
+2. Extract the archive and locate the `FW-NEW.bin` file for your radio model.
+3. **Verify the file size is exactly 1,127,552 bytes** before proceeding.
+4. Copy it into the `firmware/` directory in this repo.
 
 ## Image Tips
 
@@ -166,23 +185,50 @@ You need a stock firmware dump to use as the base for patching.  Options:
 - **Colours**: The 16-bit BGR565 format has 65,536 colours — gradients may show banding
 - **File size**: A full-screen image uses ~150 KB of the ~1.7 MB available flash
 
+## Supported Radios
+
+All of the following Guohetec SDR transceivers run the **same firmware binary** (`UHSDR-ForQ900-H7-V6-171`).  The active model is selected at runtime by an index byte stored in EEPROM — the hardware, flash layout, and boot-logo mechanism are identical across all of them.
+
+| Model | Manufacturer / Brand | Notes |
+|-------|----------------------|-------|
+| **Q900** | Guohetec | Original UHSDR/OVI40-based design |
+| **HS2** | Retevis / Ailunce | Rebadged Q900 |
+| **QR20** | Guohetec | |
+| **TBR-119** | Guohetec | Different SDR tuner front-end config |
+| **PMR-119** | Guohetec | Same tuner variant as TBR-119 |
+| **SJR-188** | Guohetec | |
+| **PMR-171** | Guohetec | |
+| **MX-1000** | Guohetec | Also known internally as XP-100 |
+
+All eight share the same STM32H7 MCU, 320×240 LCD, emWin GUI, and UHSDR-derived bootloader.  Differences between models are limited to Bluetooth device name, RF band-switching tables, IMU axis orientation, and on-screen branding — none of which affect the boot logo.
+
 ## Firmware Compatibility
 
-This tool is designed for **PMR-171 firmware v3.7.2** (stock).  The patch points (literal pool offset, coordinate instructions, text overlay BL addresses) are firmware-version-specific.  Using it with a different firmware version may produce incorrect results.
+> [!WARNING]
+> **The patch offsets used by this tool are hard-coded for a specific firmware version.**
+> Guohetec may release updated firmware at any time.  If the internal code layout changes,
+> applying these patches to a different version **will corrupt the firmware image** and could
+> leave your radio unbootable until you re-flash a known-good `FW-NEW.bin` via USB.
 
-Compatible model variants (same firmware, different splash screens):
-- PMR-171
-- Q900
-- TBR-119
-- PMR-119
-- XP-100
+| Field | Required Value |
+|-------|----------------|
+| **Firmware version** | **v3.7.2** |
+| **Build date** | `Dec 22 2025 09:25:53` |
+| **FW-NEW.bin size** | 1,127,552 bytes |
+
+If Guohetec releases a newer firmware, **do not use this tool until it has been updated and re-validated** for that version.  Check this repo for updates.
+
+**How to verify your firmware version:**
+- On the radio: *Menu → Version Info* displays the firmware version and build date.
+- On your computer: compare your `FW-NEW.bin` file size to the table above.
 
 ## Safety
 
-- **Your stock firmware can always be restored** by putting the original `FW-NEW.bin` on a USB stick
-- The tool only modifies erased flash sectors and a few code bytes — it doesn't touch the bootloader or config/calibration data
-- The bootloader validates the file size before flashing — oversized files are rejected (error code 3)
-- Always keep a backup of your stock firmware dump
+- **Wrong firmware version = potential brick.** The patch offsets are specific to v3.7.2. A patched image built from any other version will almost certainly corrupt the firmware. The radio can be recovered via USB re-flash, but **only if you have a known-good `FW-NEW.bin`**.
+- **Always keep a backup of your stock `FW-NEW.bin`** — before patching, copy the original somewhere safe.
+- **Your stock firmware can always be restored** by putting the original `FW-NEW.bin` on a USB stick and powering on.
+- The tool only modifies erased flash sectors and a few code bytes — it doesn't touch the bootloader or config/calibration data.
+- The bootloader validates the file size before flashing — oversized files are rejected (error code 3).
 
 ## License
 

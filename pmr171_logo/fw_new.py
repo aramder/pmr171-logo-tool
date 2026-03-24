@@ -1,4 +1,4 @@
-"""Generate FW-NEW.bin for PMR-171 USB bootloader firmware update.
+"""Generate and load FW-NEW.bin for PMR-171 USB bootloader firmware update.
 
 The UHSDR-derived bootloader reads ``FW-NEW.bin`` from a USB stick and
 programs it to Bank 2 (starting at 0x08020000).  The file is a raw
@@ -41,6 +41,67 @@ def _last_nonff(data: bytes | bytearray) -> int:
     return -1
 
 
+# ---------------------------------------------------------------------------
+# Load firmware (auto-detect OEM FW-NEW.bin)
+# ---------------------------------------------------------------------------
+def load_firmware(path: Path) -> bytearray:
+    """Read an OEM FW-NEW.bin and return a full 2 MB flash image.
+
+    The OEM file contains Bank 2 application data only (< 2 MB).
+    It is reconstructed into a full 2 MB image by placing it at
+    APP_OFFSET (0x20000) with the rest filled with 0xFF.
+
+    Raises
+    ------
+    FileNotFoundError
+        If *path* does not exist.
+    ValueError
+        If the file is empty, too large, or has an invalid vector table.
+    """
+    raw = path.read_bytes()
+    size = len(raw)
+
+    if size == 0:
+        raise ValueError(f"Firmware file is empty: {path}")
+
+    if size > FLASH_SIZE:
+        raise ValueError(
+            f"Firmware file is too large ({size:,} bytes). "
+            f"Expected OEM FW-NEW.bin (< 2 MB)."
+        )
+
+    if size == FLASH_SIZE:
+        # Full 2 MB image — use directly.
+        return bytearray(raw)
+
+    # Smaller file — treat as OEM FW-NEW.bin (Bank 2 application data).
+    max_app = FLASH_SIZE - APP_OFFSET
+    if size > max_app:
+        raise ValueError(
+            f"OEM file too large for Bank 2 ({size:,} > {max_app:,} bytes)."
+        )
+
+    # Validate vector table at the start of the file.
+    if size < 8:
+        raise ValueError("File too small to contain a vector table.")
+    sp, reset = struct.unpack_from("<II", raw, 0)
+    if not _sp_valid(sp):
+        raise ValueError(
+            f"Invalid initial SP (0x{sp:08X}) — does not point into SRAM. "
+            f"Is this a valid firmware file?"
+        )
+    if not _reset_valid(reset):
+        raise ValueError(
+            f"Invalid reset vector (0x{reset:08X}) — does not point into "
+            f"Bank 2 flash. Is this a valid firmware file?"
+        )
+
+    # Reconstruct full 2 MB image.
+    fw = bytearray(b"\xFF" * FLASH_SIZE)
+    fw[APP_OFFSET: APP_OFFSET + size] = raw
+    return fw
+
+
 class FwNewResult:
     """Result of a FW-NEW.bin generation."""
 
@@ -72,12 +133,12 @@ def make_fw_new(
     *,
     include_config: bool = False,
 ) -> FwNewResult:
-    """Generate FW-NEW.bin content from a full 2 MB firmware dump.
+    """Generate FW-NEW.bin content from a full 2 MB flash image.
 
     Parameters
     ----------
     firmware:
-        Complete 2 MB flash dump (or patched dump).
+        Complete 2 MB flash image (as reconstructed by ``load_firmware``).
     include_config:
         If True, include the config/calibration region at 0x081C0000.
         Default is False (preserves user settings on the radio).
@@ -89,7 +150,7 @@ def make_fw_new(
     Raises
     ------
     ValueError
-        If the input isn't a valid 2 MB dump with a Bank 2 vector table.
+        If the input isn't a valid 2 MB flash image with a Bank 2 vector table.
     """
     if len(firmware) != FLASH_SIZE:
         raise ValueError(

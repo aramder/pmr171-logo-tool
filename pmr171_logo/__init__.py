@@ -27,7 +27,7 @@ from .firmware_patch import (
     patch_firmware,
     plan_patches,
 )
-from .fw_new import FwNewResult, make_fw_new
+from .fw_new import FwNewResult, load_firmware, make_fw_new
 from .image_convert import (
     image_to_bgr565_le,
     load_and_prepare,
@@ -62,6 +62,7 @@ __all__ = [
     "plan_patches",
     # fw_new
     "FwNewResult",
+    "load_firmware",
     "make_fw_new",
     # image_convert
     "image_to_bgr565_le",
