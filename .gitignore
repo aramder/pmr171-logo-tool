@@ -29,5 +29,8 @@ Thumbs.db
 # Personal / custom boot images (not committed)
 *callsign*
 
-# Scratch / temp
+# Scratch / experimental / temp
 _scratch/
+scratch_*
+experiment_*
+test_scratch_*
