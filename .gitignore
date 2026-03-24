@@ -27,5 +27,8 @@ Thumbs.db
 *.bin
 !sample_images/*.bin
 
+# Personal / custom boot images (not committed)
+*callsign*
+
 # Scratch / temp
 _scratch/
