@@ -62,7 +62,7 @@ python cli.py patch mylogo.png --resize fill --no-text
 # Stretch to fill (may distort):
 python cli.py patch mylogo.png --resize stretch
 
-# Custom background colour for letterboxing:
+# Custom background color for letterboxing:
 python cli.py patch mylogo.png --bg-color "#1a1a2e"
 
 # Specify a different firmware file:
@@ -100,7 +100,7 @@ python cli.py patch <image> [options]
 | `-f`, `--firmware` | `firmware/FW-NEW.bin` | OEM firmware update file |
 | `-o`, `--output` | `FW-NEW.bin` | Output USB update file |
 | `--resize` | `fit` | `fit` (letterbox), `fill` (crop), `stretch`, `none` |
-| `--bg-color` | `#000000` | Letterbox background colour |
+| `--bg-color` | `#000000` | Letterbox background color |
 | `--no-text` | off | Remove model name + version text overlays |
 | `--no-model-text` | off | Remove model name only |
 | `--all-models` | off | Patch coordinates for all PMR-171 model variants |
@@ -181,8 +181,8 @@ The tool accepts the **OEM `FW-NEW.bin`** (~1.1 MB) — the USB update file dist
 
 - **Best results**: Use a 320×240 image — no resizing needed
 - **Aspect ratio**: The `fit` mode (default) letterboxes with black bars; `fill` crops to cover
-- **Transparency**: RGBA images are composited onto the background colour
-- **Colours**: The 16-bit BGR565 format has 65,536 colours — gradients may show banding
+- **Transparency**: RGBA images are composited onto the background color
+- **colors**: The 16-bit BGR565 format has 65,536 colors — gradients may show banding
 - **File size**: A full-screen image uses ~150 KB of the ~1.7 MB available flash
 
 ## Supported Radios

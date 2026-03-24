@@ -87,7 +87,7 @@ def load_and_prepare(
     target_w, target_h:
         Output dimensions (default 320x240).
     bg_rgb:
-        Background colour for letterboxing.
+        Background color for letterboxing.
 
     Returns
     -------

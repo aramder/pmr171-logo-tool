@@ -191,7 +191,7 @@ def main() -> int:
     p_patch.add_argument(
         "--bg-color",
         default="#000000",
-        help="Letterbox background colour (hex, default: #000000)",
+        help="Letterbox background color (hex, default: #000000)",
     )
     p_patch.add_argument(
         "--no-text",
