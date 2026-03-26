@@ -240,9 +240,8 @@ If Guohetec releases a newer firmware, **do not use this tool until it has been 
 
 ## Safety
 
-- **Wrong firmware version = potential brick.** The patch offsets are specific to v3.7.2. A patched image built from any other version will almost certainly corrupt the firmware. The radio can be recovered via USB re-flash, but **only if you have a known-good `FW-NEW.bin`**.
+- **Wrong firmware version = potential brick.** The patch offsets are specific to v3.7.2. A patched image built from any other version will almost certainly corrupt the firmware. USB re-flash may not always recover a bricked radio — **JTAG recovery may be required**.
 - **Always keep a backup of your stock `FW-NEW.bin`** — before patching, copy the original somewhere safe.
-- **Your stock firmware can always be restored** by putting the original `FW-NEW.bin` on a USB stick and powering on.
 - The tool only modifies erased flash sectors and a few code bytes — it doesn't touch the bootloader or config/calibration data.
 - The bootloader validates the file size before flashing — oversized files are rejected (error code 3).
 
